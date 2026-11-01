@@ -1,0 +1,37 @@
+name: Kitebuddies Forecast Alarm Cron
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  alarm-cron:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Forecast-Alarme prüfen und Push auslösen
+        env:
+          KB_CRON_SECRET: ${{ secrets.KB_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$KB_CRON_SECRET" ]; then
+            echo "::error::GitHub Secret KB_CRON_SECRET fehlt"
+            exit 1
+          fi
+
+          RESPONSE="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --get \
+            --data-urlencode "key=$KB_CRON_SECRET" \
+            "https://api.kitebuddies-nord.de/alarm/cron.php")"
+
+          echo "Antwort des Kitebuddies Alarmservers:"
+          echo "$RESPONSE"
