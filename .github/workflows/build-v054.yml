@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'Kitebuddies_v0.54_GitHub_Source.zip'
+      - '.github/workflows/build-v054.yml'
 
 jobs:
   build:
@@ -70,7 +71,7 @@ jobs:
 
           "$APKSIGNER" verify --verbose --print-certs             buildsrc/app/build/outputs/apk/release/Kitebuddies_Nord_Forecast_Pro_v0.54_Beta.apk
 
-          CERT_SHA256="$("$APKSIGNER" verify --print-certs buildsrc/app/build/outputs/apk/release/Kitebuddies_Nord_Forecast_Pro_v0.54_Beta.apk | awk -F': ' '/certificate SHA-256 digest/ {print tolower($2); exit}')"
+          CERT_SHA256="$("$APKSIGNER" verify --print-certs buildsrc/app/build/outputs/apk/release/Kitebuddies_Nord_Forecast_Pro_v0.54_Beta.apk | awk -F': ' '/certificate SHA-256 digest/ {print tolower($NF); exit}')"
           EXPECTED_SHA256="58d95162f9201e462d4b1877203af17e05c930999196834e984d28bd57024163"
 
           if [ "$CERT_SHA256" != "$EXPECTED_SHA256" ]; then
