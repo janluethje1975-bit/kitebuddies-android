@@ -1,0 +1,50 @@
+name: Build Kitebuddies v0.54
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Kitebuddies_v0.54_GitHub_Source.zip'
+      - '.github/workflows/build-v054.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: sdkmanager 'platforms;android-37' 'build-tools;36.0.0'
+
+      - name: Set up Gradle 9.6
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Unpack v0.54 source
+        run: |
+          rm -rf buildsrc
+          mkdir buildsrc
+          unzip -q Kitebuddies_v0.54_GitHub_Source.zip -d buildsrc
+
+      - name: Build unsigned release APK
+        working-directory: buildsrc
+        run: gradle --no-daemon :app:assembleRelease
+
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kitebuddies-v0.54-unsigned
+          path: buildsrc/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
