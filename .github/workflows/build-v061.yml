@@ -44,7 +44,7 @@ jobs:
           grep -q "kbAlarmFavoriteSpotIndices" buildsrc/app/src/main/assets/index.html
           grep -q "kb-bell-on" buildsrc/app/src/main/assets/index.html
           grep -q "minSdk 24" buildsrc/app/build.gradle
-          grep -q "versionName '0.60 Beta'" buildsrc/app/build.gradle
+          grep -q "versionName '0.61 Beta'" buildsrc/app/build.gradle
           grep -q "KB_LICENSE_API='https://api.kitebuddies-nord.de/license/index.php'" buildsrc/app/src/main/assets/index.html
           grep -q "installationId:ident.id" buildsrc/app/src/main/assets/index.html
           grep -q "bootLicensedApp();" buildsrc/app/src/main/assets/index.html
