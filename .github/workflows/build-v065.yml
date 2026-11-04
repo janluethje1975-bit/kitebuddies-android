@@ -121,7 +121,7 @@ jobs:
           {
             "channel": "pro-beta",
             "packageName": "de.kitebuddies.forecast.prc",
-            "versionCode": 64,
+            "versionCode": 65,
             "versionName": "0.65 Beta",
             "apkUrl": "https://api.kitebuddies-nord.de/updates/pro/Kitebuddies_Nord_Forecast_Pro_v0.65_Beta.apk",
             "sha256": "$APK_SHA256",
