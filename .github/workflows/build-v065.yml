@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'Kitebuddies_v0.65_GitHub_Source.zip'
+      - '.github/workflows/build-v065.yml'
 
 permissions:
   contents: read
@@ -64,7 +65,7 @@ jobs:
           grep -q 'const startupScope=opts.startupScope' buildsrc/app/src/main/assets/index.html
           grep -q 'if(!kbRuntimeReady||document.hidden)return;' buildsrc/app/src/main/assets/index.html
           grep -q 'kbMayShowAlarmNotice(r)' buildsrc/app/src/main/assets/index.html
-          grep -q 'kbStartupWait(refreshAllSpotBundles' buildsrc/app/src/main/assets/index.html
+          grep -q 'kbStartupWait(batchRefresh' buildsrc/app/src/main/assets/index.html
           grep -q 'kbAlarmRefreshIfNeeded' buildsrc/app/src/main/assets/index.html
 
       - name: Build unsigned release APK
