@@ -1,7 +1,16 @@
-name: Kitebuddies Station Learning v0.72
+name: Kitebuddies Station Learning · 24 Monate
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: 'collect = Messungen sammeln, stats = Speicherstand anzeigen'
+        type: choice
+        required: true
+        default: collect
+        options:
+          - collect
+          - stats
   schedule:
     - cron: '17 */3 * * *'
 
@@ -24,7 +33,27 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${KB_STATIONS_CRON_KEY:-}" ]; then
-            echo 'SKIPPED: Configure the matching KB_STATIONS_CRON_KEY secret in GitHub and private stationsCronKey on server.'
+            echo 'ERROR: Missing KB_STATIONS_CRON_KEY GitHub secret. Add same key to private server config stationsCronKey.'
+            exit 1
+          fi
+          API='https://api.kitebuddies-nord.de/kb-stations-v072.php'
+          operation='${{ github.event.inputs.operation }}'
+          if [ "$operation" = stats ]; then
+            curl -fsS --connect-timeout 5 --max-time 35 \
+              --header "X-KB-Stations-Key: ${KB_STATIONS_CRON_KEY}" \
+              --get --data-urlencode 'action=stats' \
+              --data-urlencode 'latitude=54.300' \
+              --data-urlencode 'longitude=8.603' \
+              --data-urlencode 'country=DE' \
+              "$API" -o "$RUNNER_TEMP/storage.json"
+            python3 - "$RUNNER_TEMP/storage.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1],encoding='utf-8'))
+          if not x.get('ok'): raise SystemExit('Server storage status failed: '+str(x.get('error','unknown')))
+          z=x['usage']; print('24-Monats-Lernhistorie:',z['learning']['files'],'Spots,',z['learning']['observationRows'],'Messungen,',z['learning']['forecastRows'],'Forecast-Snapshots')
+          print('Lerndaten:',round(z['learning']['bytes']/1048576,2),'MiB; Cache:',z['cache']['files'],'Dateien /',round(z['cache']['bytes']/1048576,2),'MiB')
+          print('Gesamt:',round(x['totalBytes']/1048576,2),'MiB; Cache-Dateien werden nach 24 Stunden geloescht')
+          PY
             exit 0
           fi
           # Spot coordinates are public. The server locates and verifies nearby actual DWD/DMI stations.
@@ -41,7 +70,7 @@ jobs:
             '53.96|10.873|DE|Travemuende'
             '55.139|8.483|DK|Roemoe-Lakolk'
           )
-          n=0
+          n=0; failed=0; saved_forecasts=0; active=0
           for row in "${SPOTS[@]}"; do
             IFS='|' read -r lat lon country name <<< "$row"
             printf '%s: ' "$name"
@@ -52,17 +81,43 @@ jobs:
                --data-urlencode "latitude=${lat}" \
                --data-urlencode "longitude=${lon}" \
                --data-urlencode "country=${country}" \
-               'https://api.kitebuddies-nord.de/kb-stations-v072.php' \
+               "$API" \
                -o "$RUNNER_TEMP/station.json"; then
-               python3 - "$RUNNER_TEMP/station.json" <<'PY'
+               if python3 - "$RUNNER_TEMP/station.json" <<'PY'
           import json,sys
           with open(sys.argv[1],encoding='utf-8') as f: r=json.load(f)
           print(r.get('state','?'), 'observation rows',r.get('observationRows','?'),'new forecast samples',r.get('newForecastSamples','?'),r.get('note',''))
+          if not r.get('ok'): sys.exit(2)
           PY
-               n=$((n+1))
+               then
+                 n=$((n+1))
+               else
+                 failed=$((failed+1))
+               fi
             else
-               echo 'source temporarily unavailable'
+               failed=$((failed+1))
+               echo 'Source unavailable or authorization failed'
             fi
             sleep 1
           done
-          echo "Collection requests completed: ${n}/${#SPOTS[@]}"
+          echo "Collection requests completed: ${n}/${#SPOTS[@]}; failed=${failed}"
+          if [ "$n" -eq 0 ]; then
+            echo 'ERROR: No stations collected. Check server secret and data sources.'
+            exit 1
+          fi
+          curl -fsS --connect-timeout 5 --max-time 35 \
+            --header "X-KB-Stations-Key: ${KB_STATIONS_CRON_KEY}" \
+            --get --data-urlencode 'action=stats' \
+            --data-urlencode 'latitude=54.300' \
+            --data-urlencode 'longitude=8.603' \
+            --data-urlencode 'country=DE' \
+            "$API" -o "$RUNNER_TEMP/storage.json"
+          python3 - "$RUNNER_TEMP/storage.json" <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1],encoding='utf-8'))
+          if not r.get('ok'): raise SystemExit('Storage stats returned error')
+          u=r['usage']; print('Stored observations:',u['learning']['observationRows'],'forecast snapshots:',u['learning']['forecastRows'])
+          print('24m learning MiB:',round(u['learning']['bytes']/1048576,2),'24h cache MiB:',round(u['cache']['bytes']/1048576,2))
+          if u['learning']['forecastRows']==0:
+              raise SystemExit('ERROR: No forecast snapshots yet. Check private weatherApiUrl and weatherApiToken config on server.')
+          PY
