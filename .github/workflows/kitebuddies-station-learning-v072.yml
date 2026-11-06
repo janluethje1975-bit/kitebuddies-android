@@ -1,0 +1,68 @@
+name: Kitebuddies Station Learning v0.72
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kitebuddies-station-learning-v072
+  cancel-in-progress: false
+
+jobs:
+  station-learning:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KB_STATIONS_CRON_KEY: ${{ secrets.KB_STATIONS_CRON_KEY }}
+    steps:
+      - name: Record observed wind and forecast snapshots at reference stations
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${KB_STATIONS_CRON_KEY:-}" ]; then
+            echo 'SKIPPED: Configure the matching KB_STATIONS_CRON_KEY secret in GitHub and private stationsCronKey on server.'
+            exit 0
+          fi
+          # Spot coordinates are public. The server locates and verifies nearby actual DWD/DMI stations.
+          # Do not use the public Android weather API token as the cron authentication secret.
+          SPOTS=(
+            '54.300|8.603|DE|SPO-Sued'
+            '54.286|8.651|DE|SPO-Boehl'
+            '54.912|8.300|DE|Sylt-West'
+            '54.7726|8.3001|DE|Sylt-Hoernum'
+            '53.861|8.598|DE|Cuxhaven'
+            '54.4518|11.0688|DE|Fehmarn-Gollendorf'
+            '54.405|11.176|DE|Fehmarn-Wulfen'
+            '54.407|10.224|DE|Laboe'
+            '53.96|10.873|DE|Travemuende'
+            '55.139|8.483|DK|Roemoe-Lakolk'
+          )
+          n=0
+          for row in "${SPOTS[@]}"; do
+            IFS='|' read -r lat lon country name <<< "$row"
+            printf '%s: ' "$name"
+            if curl -fsS --connect-timeout 5 --max-time 65 \
+               --header "X-KB-Stations-Key: ${KB_STATIONS_CRON_KEY}" \
+               --get \
+               --data-urlencode 'action=collect' \
+               --data-urlencode "latitude=${lat}" \
+               --data-urlencode "longitude=${lon}" \
+               --data-urlencode "country=${country}" \
+               'https://api.kitebuddies-nord.de/kb-stations-v072.php' \
+               -o "$RUNNER_TEMP/station.json"; then
+               python3 - "$RUNNER_TEMP/station.json" <<'PY'
+          import json,sys
+          with open(sys.argv[1],encoding='utf-8') as f: r=json.load(f)
+          print(r.get('state','?'), 'observation rows',r.get('observationRows','?'),'new forecast samples',r.get('newForecastSamples','?'),r.get('note',''))
+          PY
+               n=$((n+1))
+            else
+               echo 'source temporarily unavailable'
+            fi
+            sleep 1
+          done
+          echo "Collection requests completed: ${n}/${#SPOTS[@]}"
