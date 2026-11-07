@@ -1,0 +1,166 @@
+name: Kitebuddies v0.74 Android TEST (S2-Sicherheitsbasis)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-v074-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout GitHub-Repository
+        uses: actions/checkout@v4
+
+      - name: Java 17 einrichten
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle 9.6 einrichten
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Letzte gesicherte S2-Quelle aus dem Repository extrahieren
+        run: |
+          set -euo pipefail
+          test -s Kitebuddies_v0.73_Sicherheit_S2_GitHub_Source.zip
+          test -s kb_v074_patch.py
+          mkdir -p buildsrc release
+          unzip -q Kitebuddies_v0.73_Sicherheit_S2_GitHub_Source.zip -d buildsrc
+          test -s buildsrc/app/build.gradle
+          test -s buildsrc/app/src/main/assets/index.html
+          test -s buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'versionCode 73' buildsrc/app/build.gradle
+          grep -q "versionName '0.73 Beta'" buildsrc/app/build.gradle
+          grep -q 'MigrationBridge' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'registerAdminBetaPush' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q '/web-beta/weather-proxy.php' buildsrc/app/src/main/assets/pro-weather-api.js
+          grep -q "const TOKEN='';" buildsrc/app/src/main/assets/pro-weather-api.js
+          ! grep -q 'kb-weather-api.php' buildsrc/app/src/main/assets/pro-weather-api.js
+          sha256sum buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java \
+            buildsrc/app/src/main/assets/pro-weather-api.js \
+            buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/PushRegistrar.java > security-sha256-before.txt
+
+      - name: Forecast-Konsistenz-Patch auf S2-Quelle anwenden
+        run: |
+          set -euo pipefail
+          python3 kb_v074_patch.py buildsrc/app/src/main/assets
+          sed -i -E 's/(versionCode[[:space:]]+)73/\174/; s/(versionName[[:space:]]+)\x270\.73 Beta\x27/\1\x270.74 Beta\x27/' buildsrc/app/build.gradle
+          grep -q 'versionCode 74' buildsrc/app/build.gradle
+          grep -q "versionName '0.74 Beta'" buildsrc/app/build.gradle
+          sha256sum --check security-sha256-before.txt
+
+      - name: Syntax, gemeinsame Forecast-Engine und Sicherheit prüfen
+        run: |
+          set -euo pipefail
+          for file in buildsrc/app/src/main/assets/*.js; do node --check "$file"; done
+          grep -q 'KBUnifiedForecast.combine' buildsrc/app/src/main/assets/index.html
+          grep -q 'KBUnifiedForecast.combine' buildsrc/app/src/main/assets/pro-wind-overlay.js
+          grep -q 'KBWeatherAPI?.modelUrl' buildsrc/app/src/main/assets/pro-wind-overlay.js
+          ! grep -q "fetch('/web-beta/weather-proxy.php" buildsrc/app/src/main/assets/pro-wind-overlay.js
+          grep -q 'kbOwnedKites' buildsrc/app/src/main/assets/index.html
+          grep -q 'kbGearRecommendations' buildsrc/app/src/main/assets/index.html
+          grep -q 'kbAlarmRefreshIfNeeded' buildsrc/app/src/main/assets/index.html
+          grep -q 'installationId:ident.id' buildsrc/app/src/main/assets/index.html
+          grep -q 'bootLicensedApp();' buildsrc/app/src/main/assets/index.html
+          grep -q 'KB_LICENSE_API=' buildsrc/app/src/main/assets/index.html
+          grep -q 'setEnabled(false);' buildsrc/app/src/main/assets/pro-wind-overlay.js
+          test -s buildsrc/app/src/main/assets/kb-live-stations.js
+          test -s buildsrc/app/src/main/assets/kb-unified-forecast.js
+          node <<'JSTEST'
+          const fs=require('fs'), vm=require('vm'), assert=require('assert');
+          const src=fs.readFileSync('buildsrc/app/src/main/assets/kb-unified-forecast.js','utf8');
+          const ctx={window:{KBRegionalModels:{weight:()=>1,region:()=> 'nordic'}}};
+          vm.createContext(ctx);vm.runInContext(src,ctx);
+          const c=ctx.window.KBUnifiedForecast.combine([{wind:10,dir:350,weight:2,gust:13},{wind:14,dir:10,weight:1,gust:16}]);
+          assert.ok(Math.abs(c.wind-11.333333333333334)<1e-5);
+          assert.ok(c.dir<10||c.dir>350);
+          assert.ok(Math.abs(c.gust-14)<1e-5);
+          assert.equal(ctx.window.KBUnifiedForecast.LEARNING_WEIGHTS_ACTIVE,false);
+          console.log('Superforecast-Mischung (Wind/Boeen/Kreisrichtung) OK');
+          JSTEST
+          # Check inline script syntax from Android HTML (ignore scripts with src / structured data)
+          python3 - <<'PYCODE'
+          import re,subprocess,pathlib,tempfile
+          html=pathlib.Path('buildsrc/app/src/main/assets/index.html').read_text()
+          scripts=re.findall(r'<script\b([^>]*)>(.*?)</script\s*>',html,flags=re.I|re.S)
+          count=0
+          for attrs,body in scripts:
+              if 'src=' in attrs.lower() or not body.strip():continue
+              if 'application/ld+json' in attrs.lower():continue
+              with tempfile.NamedTemporaryFile('w',suffix='.js') as f:
+                  f.write(body);f.flush()
+                  p=subprocess.run(['node','--check',f.name],capture_output=True,text=True)
+                  if p.returncode:
+                      print('Inline script failed',count,p.stderr[:1000]);raise SystemExit(1)
+              count+=1
+          print('Inline scripts checked:',count)
+          PYCODE
+
+      - name: Signierfähige Android-APK bauen
+        working-directory: buildsrc
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+
+      - name: Signierdatei ausschließlich temporär wiederherstellen
+        env:
+          KB_KEYSTORE_B64: ${{ secrets.KB_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_B64" || { echo '::error::GitHub Secret KB_KEYSTORE_B64 fehlt'; exit 1; }
+          printf '%s' "$KB_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/kitebuddies-pro.jks"
+
+      - name: APK signieren und bekannte Signatur prüfen
+        env:
+          KB_KEYSTORE_PASSWORD: ${{ secrets.KB_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_PASSWORD" || { echo '::error::GitHub Secret KB_KEYSTORE_PASSWORD fehlt'; exit 1; }
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          TOOLS_VERSION="$(ls -1 "$SDK_ROOT/build-tools" | sort -V | tail -n 1)"
+          ZIPALIGN="$SDK_ROOT/build-tools/$TOOLS_VERSION/zipalign"
+          APKSIGNER="$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner"
+          "$ZIPALIGN" -f 4 \
+            buildsrc/app/build/outputs/apk/release/app-release-unsigned.apk \
+            release/app-release-aligned.apk
+          "$APKSIGNER" sign \
+            --ks "$RUNNER_TEMP/kitebuddies-pro.jks" \
+            --ks-type PKCS12 \
+            --ks-key-alias kitebuddiespro \
+            --ks-pass env:KB_KEYSTORE_PASSWORD \
+            --key-pass env:KB_KEYSTORE_PASSWORD \
+            --out release/Kitebuddies_Nord_Forecast_Pro_v0.74_TEST.apk \
+            release/app-release-aligned.apk
+          "$APKSIGNER" verify --verbose --print-certs \
+            release/Kitebuddies_Nord_Forecast_Pro_v0.74_TEST.apk
+          CERT_SHA256="$("$APKSIGNER" verify --print-certs release/Kitebuddies_Nord_Forecast_Pro_v0.74_TEST.apk | awk -F': ' '/certificate SHA-256 digest/ {print tolower($NF); exit}')"
+          EXPECTED_SHA256='58d95162f9201e462d4b1877203af17e05c930999196834e984d28bd57024163'
+          test "$CERT_SHA256" = "$EXPECTED_SHA256" || { echo '::error::Falsche Signatur - Upgrade blockiert'; exit 1; }
+          rm -f "$RUNNER_TEMP/kitebuddies-pro.jks" release/app-release-aligned.apk
+
+      - name: Prüfbericht und Quellcode für internen Test bereitstellen
+        run: |
+          set -euo pipefail
+          cat > release/TEST_HINWEIS.txt <<'EOF'
+          Kitebuddies Nord Forecast Pro v0.74 – TESTBAU
+          Android v0.74 auf Sicherheitsbasis S2; S3/S4 sind Server-Pakete.
+          Keine automatische Live-Veröffentlichung und KEIN Server-Update-Manifest.
+          Vor Verteilung an andere Nutzer: vollständiger Live-/Performance-/Alarm-/Push-Test.
+          Bestehende v0.73-APK nicht löschen. Update nur bei identischer Signatur.
+          EOF
+          cd buildsrc && zip -q -r ../release/Kitebuddies_v0.74_S2_Android_Merged_Source.zip . -x 'app/build/*' '.gradle/*'
+
+      - name: Android-Test-APK und Prüfpaket speichern (nicht veröffentlichen)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kitebuddies-v0.74-S2-TEST
+          path: |
+            release/Kitebuddies_Nord_Forecast_Pro_v0.74_TEST.apk
+            release/Kitebuddies_v0.74_S2_Android_Merged_Source.zip
+            release/TEST_HINWEIS.txt
+          retention-days: 14
+          if-no-files-found: error
