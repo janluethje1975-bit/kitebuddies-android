@@ -1,0 +1,113 @@
+name: Build Kitebuddies v0.75 Beta Android (S2 Sicherheitsbasis)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-v075-beta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Gradle 9.6
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - name: Extract and verify beta source
+        run: |
+          set -euo pipefail
+          test -s Kitebuddies_v0.75_Beta_Android_Source.zip
+          mkdir -p buildsrc release
+          unzip -q Kitebuddies_v0.75_Beta_Android_Source.zip -d buildsrc
+          grep -q 'versionCode 76' buildsrc/app/build.gradle
+          grep -q "versionName '0.75 Beta'" buildsrc/app/build.gradle
+          grep -q 'de.kitebuddies.forecast.prc' buildsrc/app/build.gradle
+          grep -q 'web-beta/v074-beta/android.php' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'MigrationBridge' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'registerAdminBetaPush' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'KB_LICENSE_API' buildsrc/app/src/main/assets/index.html
+          grep -q '/web-beta/weather-proxy.php' buildsrc/app/src/main/assets/pro-weather-api.js
+          grep -q "const TOKEN='';" buildsrc/app/src/main/assets/pro-weather-api.js
+          ! grep -q 'kb-weather-api.php' buildsrc/app/src/main/assets/pro-weather-api.js
+          for f in buildsrc/app/src/main/assets/*.js; do node --check "$f"; done
+      - name: Build release APK unsigned
+        working-directory: buildsrc
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+      - name: Restore signing secret only in runner
+        env:
+          KB_KEYSTORE_B64: ${{ secrets.KB_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_B64" || { echo '::error::KB_KEYSTORE_B64 missing'; exit 1; }
+          printf '%s' "$KB_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/kb-pro.jks"
+      - name: Align, sign, verify certificate
+        env:
+          KB_KEYSTORE_PASSWORD: ${{ secrets.KB_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_PASSWORD" || { echo '::error::KB_KEYSTORE_PASSWORD missing'; exit 1; }
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          TOOLS_VERSION="$(ls -1 "$SDK_ROOT/build-tools" | sort -V | tail -n 1)"
+          ZIPALIGN="$SDK_ROOT/build-tools/$TOOLS_VERSION/zipalign"
+          SIGNER="$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner"
+          "$ZIPALIGN" -f 4 buildsrc/app/build/outputs/apk/release/app-release-unsigned.apk release/aligned.apk
+          "$SIGNER" sign --ks "$RUNNER_TEMP/kb-pro.jks" --ks-type PKCS12 \
+            --ks-key-alias kitebuddiespro --ks-pass env:KB_KEYSTORE_PASSWORD \
+            --key-pass env:KB_KEYSTORE_PASSWORD \
+            --out release/Kitebuddies_v0.75_Beta.apk release/aligned.apk
+          "$SIGNER" verify --verbose --print-certs release/Kitebuddies_v0.75_Beta.apk
+          CERT_SHA256="$("$SIGNER" verify --print-certs release/Kitebuddies_v0.75_Beta.apk | awk -F': ' '/certificate SHA-256 digest/ {print tolower($NF); exit}')"
+          EXPECTED_SHA256='58d95162f9201e462d4b1877203af17e05c930999196834e984d28bd57024163'
+          test "$CERT_SHA256" = "$EXPECTED_SHA256" || { echo '::error::Signing key mismatch'; exit 1; }
+          sha256sum release/Kitebuddies_v0.75_Beta.apk > release/APK_SHA256.txt
+          rm -f "$RUNNER_TEMP/kb-pro.jks" release/aligned.apk
+      - name: Generate update manifest from signed APK
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_MANIFEST'
+          import hashlib, json, pathlib
+          apk = pathlib.Path('release/Kitebuddies_v0.75_Beta.apk')
+          assert apk.is_file() and apk.stat().st_size > 1000000, 'APK missing or unexpectedly small'
+          payload = {
+              'channel': 'beta',
+              'packageName': 'de.kitebuddies.forecast.prc',
+              'versionCode': 76,
+              'versionName': '0.75 Beta',
+              'mandatory': False,
+              'apkUrl': 'https://api.kitebuddies-nord.de/updates/pro/Kitebuddies_v0.75_Beta.apk',
+              'publishedAt': '2026-11-10',
+              'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
+              'changes': [
+                  'Spotkarte und Forecast: synchronisierte Zeiten, Windwerte und Windfilter',
+                  'Besser erkennbares bestes Kitefenster und auswählbare Tagesalternativen',
+                  'Passendes Tagesfenster steuert Wind, Böen, Forecast-Details und Kiteempfehlungen gemeinsam',
+                  'Wind-, Wetter-, Wellen- und Gezeitendiagramme auf ausgewähltes Kitefenster zoomen',
+                  'Windrichtungspfeile auch in kurzen ausgewählten Zeitfenstern',
+                  'Forecast-Tabelle zeigt bei alternativen Kitefenstern die tatsächlich vorhandenen Modellstunden',
+                  'Persönliche Kiteempfehlungen: erste Empfehlung und passende Alternative, Tube und Softkite',
+                  'Eigene Kiteprofile, Erfahrungswerte und Mindestwindgrenzen bleiben erhalten',
+              ],
+          }
+          pathlib.Path('release/kitebuddies-update.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
+          )
+          PY_MANIFEST
+      - name: Publish GitHub artifact only (no server release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kitebuddies-v0.75-Beta-signed-APK
+          path: |
+            release/Kitebuddies_v0.75_Beta.apk
+            release/APK_SHA256.txt
+            release/kitebuddies-update.json
+          retention-days: 30
+          if-no-files-found: error
