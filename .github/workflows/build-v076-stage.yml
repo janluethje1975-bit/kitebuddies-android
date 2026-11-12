@@ -1,0 +1,70 @@
+name: Kitebuddies v0.76 Beta STAGE Android
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-v076-stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - name: Set up Android SDK command-line tools
+        uses: android-actions/setup-android@v4
+      - name: Install stable Android platform 36 and build tools
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+      - name: Extract source and verify scope
+        run: |
+          set -euo pipefail
+          test -s Kitebuddies_v076_Beta_Android_STAGE_Source.zip
+          mkdir -p buildsrc release
+          unzip -q Kitebuddies_v076_Beta_Android_STAGE_Source.zip -d buildsrc
+          grep -q 'versionCode 78' buildsrc/app/build.gradle
+          grep -q 'compileSdk 36' buildsrc/app/build.gradle
+          grep -q 'targetSdk 36' buildsrc/app/build.gradle
+          grep -q "applicationId 'de.kitebuddies.forecast.prc.stage'" buildsrc/app/build.gradle
+          grep -q '/web-beta/v076-beta/android.php' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'AndroidSpotFiles' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'onShowFileChooser' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          test -f buildsrc/app/src/main/res/xml/kb_spot_file_paths.xml
+          for f in buildsrc/app/src/main/assets/*.js; do node --check "$f"; done
+      - name: Build unsigned APK
+        working-directory: buildsrc
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+      - name: Restore signing secret on temporary runner only
+        env:
+          KB_KEYSTORE_B64: ${{ secrets.KB_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_B64" || { echo '::error::Missing keystore'; exit 1; }
+          printf '%s' "$KB_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/kitebuddies-sign.jks"
+      - name: Align, sign and check certificate
+        env:
+          KB_KEYSTORE_PASSWORD: ${{ secrets.KB_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_PASSWORD"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          TOOLS_VERSION="$(ls -1 "$SDK_ROOT/build-tools" | sort -V | tail -n 1)"
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/zipalign" -f 4 buildsrc/app/build/outputs/apk/release/app-release-unsigned.apk release/aligned.apk
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" sign --ks "$RUNNER_TEMP/kitebuddies-sign.jks" --ks-type PKCS12 \
+            --ks-key-alias kitebuddiespro --ks-pass env:KB_KEYSTORE_PASSWORD --key-pass env:KB_KEYSTORE_PASSWORD \
+            --out release/Kitebuddies_v0.76_Beta_SPOT_TEST.apk release/aligned.apk
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" verify --verbose --print-certs release/Kitebuddies_v0.76_Beta_SPOT_TEST.apk
+          CERT_SHA256="$("$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" verify --print-certs release/Kitebuddies_v0.76_Beta_SPOT_TEST.apk | awk -F': ' '/certificate SHA-256 digest/ {print tolower($NF); exit}')"
+          test "$CERT_SHA256" = '58d95162f9201e462d4b1877203af17e05c930999196834e984d28bd57024163'
+          sha256sum release/Kitebuddies_v0.76_Beta_SPOT_TEST.apk > release/APK_SHA256.txt
+          rm -f "$RUNNER_TEMP/kitebuddies-sign.jks" release/aligned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kitebuddies-v076-STAGE-signed
+          path: release/
+          retention-days: 30
+          if-no-files-found: error
