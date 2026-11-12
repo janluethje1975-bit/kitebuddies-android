@@ -1,0 +1,123 @@
+name: Kitebuddies v0.77 Beta RC1 Android (v79) – test only
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-v077-rc1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - uses: android-actions/setup-android@v4
+      - name: Install Android SDK 36
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+      - name: Extract source and preserve last regular Firebase app configuration
+        run: |
+          set -euo pipefail
+          test -s Kitebuddies_v077_Beta_RC1_Android_Source.zip
+          echo "864a3209dd4714a89b579b21290dfc265b5fd7418e30d23fd7cffc88df3721aa  Kitebuddies_v077_Beta_RC1_Android_Source.zip" | sha256sum -c -
+          test -s Kitebuddies_v0.75_Beta_AdminPush_Android_Source_v77.zip
+          mkdir -p buildsrc release
+          unzip -q Kitebuddies_v077_Beta_RC1_Android_Source.zip -d buildsrc
+          python3 - <<'PY_CONFIG'
+          import zipfile, hashlib, pathlib, re, json
+          old=pathlib.Path('Kitebuddies_v0.75_Beta_AdminPush_Android_Source_v77.zip')
+          expected='aaaae50207e0546f60d9e33eab0d6dce9b1e66a9652abed9bb58c95f70194a5c'
+          assert hashlib.sha256(old.read_bytes()).hexdigest()==expected,'v0.75 signed-release baseline changed'
+          with zipfile.ZipFile(old) as src:
+              assert 'app/google-services.json' in src.namelist(),'Firebase config missing in verified v0.75 source'
+              dest=pathlib.Path('buildsrc/app/google-services.json')
+              dest.write_bytes(src.read('app/google-services.json'))
+              cfg=json.loads(dest.read_text())
+              assert any(c.get('client_info',{}).get('android_client_info',{}).get('package_name')=='de.kitebuddies.forecast.prc' for c in cfg.get('client',[])), 'Firebase package ID does not match regular app'
+              # Preserve installed launcher label from last regular Android build.
+              old_manifest=src.read('app/src/main/AndroidManifest.xml').decode('utf-8')
+              match=re.search(r'android:label="([^"]+)"',old_manifest)
+              assert match is not None, 'Existing app label unavailable'
+              manifest=pathlib.Path('buildsrc/app/src/main/AndroidManifest.xml')
+              changed=re.sub(r'android:label="[^"]+"','android:label="'+match.group(1)+'"',manifest.read_text(),count=1)
+              manifest.write_text(changed)
+          PY_CONFIG
+          grep -q "applicationId 'de.kitebuddies.forecast.prc'" buildsrc/app/build.gradle
+          ! grep -q "applicationId 'de.kitebuddies.forecast.prc.stage'" buildsrc/app/build.gradle
+          grep -q 'versionCode 79' buildsrc/app/build.gradle
+          grep -Fq "versionName '0.77 Beta RC1'" buildsrc/app/build.gradle
+          grep -q 'compileSdk 36' buildsrc/app/build.gradle
+          grep -q 'targetSdk 36' buildsrc/app/build.gradle
+          grep -q "id 'com.google.gms.google-services'" buildsrc/app/build.gradle
+          grep -q 'ANDROID_HOME="https://api.kitebuddies-nord.de/web-beta/android.php"' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'syncSavedWindPush();' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'REQ_RECONNECT_NOTIFICATIONS' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          ! grep -q '"/web-beta/android.php".equals(p)||' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'registerAdminBetaPush();' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'AndroidSpotFiles' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'onShowFileChooser' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          test -s buildsrc/app/src/main/res/xml/kb_spot_file_paths.xml
+          for f in buildsrc/app/src/main/assets/*.js; do node --check "$f"; done
+      - name: Build unsigned regular release APK
+        working-directory: buildsrc
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+      - name: Sign with existing beta release signing key and verify certificate
+        env:
+          KB_KEYSTORE_B64: ${{ secrets.KB_KEYSTORE_B64 }}
+          KB_KEYSTORE_PASSWORD: ${{ secrets.KB_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_B64" || { echo '::error::Missing signing key secret'; exit 1; }
+          test -n "$KB_KEYSTORE_PASSWORD" || { echo '::error::Missing signing password'; exit 1; }
+          printf '%s' "$KB_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/kb-pro.jks"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          TOOLS_VERSION="$(ls -1 "$SDK_ROOT/build-tools" | sort -V | tail -n 1)"
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/zipalign" -f 4 buildsrc/app/build/outputs/apk/release/app-release-unsigned.apk release/aligned.apk
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" sign --ks "$RUNNER_TEMP/kb-pro.jks" --ks-type PKCS12 \
+            --ks-key-alias kitebuddiespro --ks-pass env:KB_KEYSTORE_PASSWORD \
+            --key-pass env:KB_KEYSTORE_PASSWORD \
+            --out release/Kitebuddies_v0.77_Beta_RC1.apk release/aligned.apk
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" verify --verbose --print-certs release/Kitebuddies_v0.77_Beta_RC1.apk
+          CERT_SHA256="$("$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" verify --print-certs release/Kitebuddies_v0.77_Beta_RC1.apk | awk -F': ' '/certificate SHA-256 digest/ {print tolower($NF); exit}')"
+          test "$CERT_SHA256" = '58d95162f9201e462d4b1877203af17e05c930999196834e984d28bd57024163' || { echo '::error::Wrong release signing certificate'; exit 1; }
+          sha256sum release/Kitebuddies_v0.77_Beta_RC1.apk > release/APK_SHA256.txt
+          rm -f "$RUNNER_TEMP/kb-pro.jks" release/aligned.apk
+      - name: Generate update manifest using actual signed APK hash
+        run: |
+          python3 - <<'PY_MANIFEST'
+          import pathlib, hashlib, json, datetime
+          apk=pathlib.Path('release/Kitebuddies_v0.77_Beta_RC1.apk')
+          assert apk.stat().st_size>1000000, 'Signed APK missing or suspiciously small'
+          d={
+            'channel':'beta-rc',
+            'packageName':'de.kitebuddies.forecast.prc',
+            'versionCode':79,
+            'versionName':'0.77 Beta RC1',
+            'mandatory':False,
+            'apkUrl':'https://api.kitebuddies-nord.de/updates/pro/Kitebuddies_v0.77_Beta_RC1.apk',
+            'publishedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'sha256':hashlib.sha256(apk.read_bytes()).hexdigest(),
+            'changes':[
+               'Neuer zentraler Android-Einstieg /web-beta/android.php',
+               'FCM-Token erneute Registrierung vorhandener Windalarme',
+               'Bestehende Spot- und Gezeitenregeln unverändert',
+               'Android-Benachrichtigungsberechtigung für gekoppelte Alarmgeräte prüfen',
+               'RC1 Test – noch keine produktive Freigabe'
+            ]
+          }
+          pathlib.Path('release/RC1_UPDATE_MANIFEST_NICHT_VEROEFFENTLICHEN.json').write_text(json.dumps(d,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          PY_MANIFEST
+      - name: Upload signed RC1 only as GitHub artifact (NOT deployed to server)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kitebuddies-v077-RC1-signed-TEST
+          path: |
+            release/Kitebuddies_v0.77_Beta_RC1.apk
+            release/APK_SHA256.txt
+            release/RC1_UPDATE_MANIFEST_NICHT_VEROEFFENTLICHEN.json
+          retention-days: 30
+          if-no-files-found: error
