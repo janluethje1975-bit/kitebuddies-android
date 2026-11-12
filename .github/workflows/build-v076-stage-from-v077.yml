@@ -1,0 +1,75 @@
+name: Kitebuddies v0.76 Beta STAGE (from verified v0.75 v77)
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-v076-stage-from-v077.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - name: Prepare v0.76 source from verified v0.75 v77
+        env:
+          KB_PATCH_B64: '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'
+        run: |
+          python3 - <<'PY_BUILD'
+          import base64,hashlib,os,pathlib,subprocess,zipfile,zlib
+          source=pathlib.Path('Kitebuddies_v0.75_Beta_AdminPush_Android_Source_v77.zip')
+          assert source.is_file(), 'Missing v0.75 v77 source ZIP in GitHub root'
+          assert hashlib.sha256(source.read_bytes()).hexdigest()=='aaaae50207e0546f60d9e33eab0d6dce9b1e66a9652abed9bb58c95f70194a5c', 'Base source changed'
+          patch=zlib.decompress(base64.b64decode(os.environ['KB_PATCH_B64']))
+          assert hashlib.sha256(patch).hexdigest()=='382c33cc3a199cbf7985f6704a39fa1edbf364f7a092eab266c8d71dae94199b', 'Patch changed'
+          with zipfile.ZipFile(source) as z: z.extractall('buildsrc')
+          subprocess.run(['patch','-p1','-d','buildsrc','--batch','--forward'],input=patch,check=True)
+          pathlib.Path('buildsrc/app/google-services.json').unlink(missing_ok=True)
+          build=pathlib.Path('buildsrc/app/build.gradle').read_text()
+          java=pathlib.Path('buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java').read_text()
+          assert "applicationId 'de.kitebuddies.forecast.prc.stage'" in build
+          assert 'versionCode 78' in build
+          assert '/web-beta/v076-beta/android.php' in java
+          assert 'AndroidSpotFiles' in java and 'onShowFileChooser' in java
+          PY_BUILD
+      - name: Ensure Android SDK 37
+        run: |
+          if ! test -f "${ANDROID_HOME}/platforms/android-37/android.jar"; then
+            yes | sdkmanager "platforms;android-37" "build-tools;36.0.0"
+          fi
+      - name: Build release APK
+        working-directory: buildsrc
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+      - name: Sign and verify APK
+        env:
+          KB_KEYSTORE_B64: ${{ secrets.KB_KEYSTORE_B64 }}
+          KB_KEYSTORE_PASSWORD: ${{ secrets.KB_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_B64"
+          test -n "$KB_KEYSTORE_PASSWORD"
+          mkdir -p release
+          printf '%s' "$KB_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/kitebuddies-sign.jks"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          TOOLS_VERSION="$(ls -1 "$SDK_ROOT/build-tools" | sort -V | tail -n 1)"
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/zipalign" -f 4 buildsrc/app/build/outputs/apk/release/app-release-unsigned.apk release/aligned.apk
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" sign --ks "$RUNNER_TEMP/kitebuddies-sign.jks" --ks-type PKCS12 --ks-key-alias kitebuddiespro --ks-pass env:KB_KEYSTORE_PASSWORD --key-pass env:KB_KEYSTORE_PASSWORD --out release/Kitebuddies_v0.76_Beta_STAGE.apk release/aligned.apk
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" verify --verbose --print-certs release/Kitebuddies_v0.76_Beta_STAGE.apk
+          CERT_SHA256="$("$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" verify --print-certs release/Kitebuddies_v0.76_Beta_STAGE.apk | awk -F': ' '/certificate SHA-256 digest/ {print tolower($NF); exit}')"
+          test "$CERT_SHA256" = '58d95162f9201e462d4b1877203af17e05c930999196834e984d28bd57024163'
+          sha256sum release/Kitebuddies_v0.76_Beta_STAGE.apk > release/APK_SHA256.txt
+          rm -f "$RUNNER_TEMP/kitebuddies-sign.jks" release/aligned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kitebuddies-v076-STAGE-signed
+          path: release/
+          retention-days: 30
+          if-no-files-found: error
