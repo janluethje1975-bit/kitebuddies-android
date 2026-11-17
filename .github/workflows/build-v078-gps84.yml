@@ -1,0 +1,115 @@
+name: Kitebuddies v0.78 Beta GPS and Launcher Icon (Code 84) - signed
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-v078-gps84:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - uses: android-actions/setup-android@v4
+      - name: Install Android SDK 36
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+      - name: Extract verified RC4 Android sources and original Firebase config
+        run: |
+          set -euo pipefail
+          echo "ad63a428a3f95dbe58e68d7747dd77d55fe204a14b874a726e0ac609a64948df  Kitebuddies_v077_Beta_RC4_Android_Source.zip" | sha256sum -c -
+          echo "aaaae50207e0546f60d9e33eab0d6dce9b1e66a9652abed9bb58c95f70194a5c  Kitebuddies_v0.75_Beta_AdminPush_Android_Source_v77.zip" | sha256sum -c -
+          mkdir -p buildsrc release
+          unzip -q Kitebuddies_v077_Beta_RC4_Android_Source.zip -d buildsrc
+          python3 - <<'PY_CONFIG'
+          import zipfile,pathlib,re,json
+          old=pathlib.Path('Kitebuddies_v0.75_Beta_AdminPush_Android_Source_v77.zip')
+          with zipfile.ZipFile(old) as src:
+              dest=pathlib.Path('buildsrc/app/google-services.json')
+              dest.write_bytes(src.read('app/google-services.json'))
+              cfg=json.loads(dest.read_text(encoding='utf-8'))
+              assert any(c.get('client_info',{}).get('android_client_info',{}).get('package_name')=='de.kitebuddies.forecast.prc' for c in cfg.get('client',[])), 'Firebase package mismatch'
+              old_manifest=src.read('app/src/main/AndroidManifest.xml').decode('utf-8')
+              match=re.search(r'android:label="([^"]+)"',old_manifest)
+              assert match, 'Installed app launcher label missing'
+              manifest=pathlib.Path('buildsrc/app/src/main/AndroidManifest.xml')
+              manifest.write_text(re.sub(r'android:label="[^"]+"','android:label="'+match.group(1)+'"',manifest.read_text(),count=1))
+          PY_CONFIG
+      - name: Apply GPS permissions and native app icon without touching alarms
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/patch_v078_gps84.py
+          grep -q "applicationId 'de.kitebuddies.forecast.prc'" buildsrc/app/build.gradle
+          grep -q 'versionCode 84' buildsrc/app/build.gradle
+          grep -Fq "versionName '0.78 Beta'" buildsrc/app/build.gradle
+          grep -q 'compileSdk 36' buildsrc/app/build.gradle
+          grep -q 'targetSdk 36' buildsrc/app/build.gradle
+          grep -q 'ACCESS_FINE_LOCATION' buildsrc/app/src/main/AndroidManifest.xml
+          grep -q 'ACCESS_COARSE_LOCATION' buildsrc/app/src/main/AndroidManifest.xml
+          grep -q '@drawable/kb_launcher' buildsrc/app/src/main/AndroidManifest.xml
+          grep -q 'onGeolocationPermissionsShowPrompt' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'onShowFileChooser' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'registerAdminBetaPush();' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          grep -q 'syncSavedWindPush();' buildsrc/app/src/main/java/de/kitebuddies/forecast/prc/MainActivity.java
+          test -s buildsrc/app/src/main/res/drawable/kb_launcher.xml
+          for f in buildsrc/app/src/main/assets/*.js; do node --check "$f"; done
+      - name: Build regular Android release APK
+        working-directory: buildsrc
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+      - name: Sign using EXISTING beta key and verify certificate
+        env:
+          KB_KEYSTORE_B64: ${{ secrets.KB_KEYSTORE_B64 }}
+          KB_KEYSTORE_PASSWORD: ${{ secrets.KB_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KB_KEYSTORE_B64" || { echo '::error::Existing keystore secret missing'; exit 1; }
+          test -n "$KB_KEYSTORE_PASSWORD" || { echo '::error::Existing keystore password missing'; exit 1; }
+          printf '%s' "$KB_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/kb-pro.jks"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          TOOLS_VERSION="$(ls -1 "$SDK_ROOT/build-tools" | sort -V | tail -n 1)"
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/zipalign" -f 4 buildsrc/app/build/outputs/apk/release/app-release-unsigned.apk release/aligned.apk
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" sign --ks "$RUNNER_TEMP/kb-pro.jks" --ks-type PKCS12 \
+            --ks-key-alias kitebuddiespro --ks-pass env:KB_KEYSTORE_PASSWORD \
+            --key-pass env:KB_KEYSTORE_PASSWORD \
+            --out release/Kitebuddies_v0.78_Beta_GPS84.apk release/aligned.apk
+          "$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" verify --verbose --print-certs release/Kitebuddies_v0.78_Beta_GPS84.apk
+          CERT_SHA256="$("$SDK_ROOT/build-tools/$TOOLS_VERSION/apksigner" verify --print-certs release/Kitebuddies_v0.78_Beta_GPS84.apk | awk -F': ' '/certificate SHA-256 digest/ {print tolower($NF); exit}')"
+          test "$CERT_SHA256" = '58d95162f9201e462d4b1877203af17e05c930999196834e984d28bd57024163' || { echo '::error::Unexpected signing certificate'; exit 1; }
+          sha256sum release/Kitebuddies_v0.78_Beta_GPS84.apk > release/APK_SHA256.txt
+          rm -f "$RUNNER_TEMP/kb-pro.jks" release/aligned.apk
+      - name: Write GPS fix update manifest FOR REVIEW ONLY
+        run: |
+          python3 - <<'PY_MANIFEST'
+          from pathlib import Path
+          from datetime import datetime, timezone
+          import json,hashlib
+          apk=Path('release/Kitebuddies_v0.78_Beta_GPS84.apk')
+          assert apk.stat().st_size>1000000, 'Signed APK missing'
+          manifest={
+              'channel':'beta','packageName':'de.kitebuddies.forecast.prc',
+              'versionCode':84,'versionName':'0.78 Beta','mandatory':False,
+              'apkUrl':'https://api.kitebuddies-nord.de/updates/pro/Kitebuddies_v0.78_Beta_GPS84.apk',
+              'publishedAt':datetime.now(timezone.utc).isoformat(),
+              'sha256':hashlib.sha256(apk.read_bytes()).hexdigest(),
+              'changes':['Android-GPS-Freigabe direkt beim Standortklick',
+                'Android App-Einstellungen bei dauerhaft verweigerter Standortberechtigung',
+                'Kitebuddies K als natives Launcher-Symbol',
+                'Bestehende Forecast A/B-, Feedback- und Firebase-Push-Funktionen unverändert']}
+          Path('release/GPS84_UPDATE_MANIFEST_NICHT_AUTOMATISCH_VEROEFFENTLICHEN.json').write_text(
+              json.dumps(manifest,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          PY_MANIFEST
+      - name: Upload signed APK as PRIVATE artifact - NEVER deploy automatically
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kitebuddies-v078-GPS84-signed-TEST
+          path: |
+            release/Kitebuddies_v0.78_Beta_GPS84.apk
+            release/APK_SHA256.txt
+            release/GPS84_UPDATE_MANIFEST_NICHT_AUTOMATISCH_VEROEFFENTLICHEN.json
+          retention-days: 30
+          if-no-files-found: error
